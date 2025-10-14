@@ -1,51 +1,68 @@
 import express from "express";
-import bodyParser from "body-parser";
-import { Twilio } from "twilio";
+import axios from "axios";
 import puppeteer from "puppeteer";
+import twilio from "twilio";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 const app = express();
-app.use(bodyParser.urlencoded({ extended: false }));
+app.use(express.urlencoded({ extended: false }));
 
-// Twilio credentials (from your Twilio Console)
-const client = new Twilio(
+// Twilio credentials from .env
+const client = twilio(
   process.env.TWILIO_ACCOUNT_SID,
   process.env.TWILIO_AUTH_TOKEN
 );
 
+// ✅ Basic route to check app is running
+app.get("/", (req, res) => {
+  res.send("TVET WhatsApp Bot is running ✅");
+});
+
+// ✅ WhatsApp Webhook (Twilio sends incoming messages here)
 app.post("/whatsapp", async (req, res) => {
+  const message = req.body.Body?.toLowerCase().trim();
   const from = req.body.From;
-  const body = req.body.Body.trim().toLowerCase();
 
-  console.log("Received message:", body);
+  console.log(`📩 Message from ${from}: ${message}`);
 
-  if (body.includes("past paper")) {
-    const browser = await puppeteer.launch({ headless: true });
-    const page = await browser.newPage();
-    await page.goto("https://www.tvetpapers.co.za", { waitUntil: "domcontentloaded" });
-
-    const links = await page.$$eval("a", (a) =>
-      a.map((el) => el.href).filter((href) => href.endsWith(".pdf"))
-    );
-    await browser.close();
-
-    const message = links.length
-      ? `📄 Found some papers:\n${links.slice(0, 5).join("\n")}`
-      : "Sorry, couldn’t find any papers right now.";
-
+  // If user says "hi" or "hello"
+  if (message === "hi" || message === "hello") {
     await client.messages.create({
       from: "whatsapp:+14155238886", // Twilio sandbox number
       to: from,
-      body: message,
+      body: "👋 Hello! Send me a subject name (e.g. 'Electrical Engineering N3') and I’ll fetch the latest past paper for you."
     });
-  } else {
+    return res.sendStatus(200);
+  }
+
+  // Otherwise, try to fetch a paper
+  try {
+    const searchUrl = `https://tvetpapers.co.za/?s=${encodeURIComponent(message)}`;
+    const browser = await puppeteer.launch({ headless: true });
+    const page = await browser.newPage();
+    await page.goto(searchUrl, { waitUntil: "domcontentloaded" });
+
+    const resultLink = await page.$eval(".entry-title a", a => a.href);
+    await browser.close();
+
     await client.messages.create({
       from: "whatsapp:+14155238886",
       to: from,
-      body: "👋 Hi! Send me a message like: 'Past Paper N1 Maths' to get exam papers.",
+      body: `Here’s the latest ${message} paper 📘: ${resultLink}`
+    });
+  } catch (err) {
+    console.error("Error:", err.message);
+    await client.messages.create({
+      from: "whatsapp:+14155238886",
+      to: from,
+      body: "⚠️ Sorry, I couldn’t find that paper. Try another subject or N-level (e.g. 'Mathematics N2')."
     });
   }
 
   res.sendStatus(200);
 });
 
-app.listen(3000, () => console.log("✅ Bot running on port 3000"));
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
